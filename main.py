@@ -14,6 +14,7 @@ import utils
 import OurDDPG
 import SPG
 import TD3
+import SPGTQC
 
 # In[17]:
 
@@ -202,6 +203,10 @@ if __name__ == "__main__":
         policy = SPGR.SPGR(**kwargs)
 
     elif args.policy == "SPGTQC":
+        kwargs["n_quantiles"] = 25
+        kwargs["n_nets"] = 5
+        kwargs["top_quantiles_to_drop"] = 2
+        kwargs["target_entropy"] = -np.prod(env.action_space.shape).item()
         policy = SPGTQC.SPGTQC(**kwargs)
 
 
