@@ -15,13 +15,14 @@ import OurDDPG
 import SPG
 import TD3
 import SPGTQC
+import TQC
 
 # In[17]:
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def eval_policy(policy, env_name,seed,eval_episodes=10):
+def eval_policy(policy, env_name,seed,eval_episodes=5):
     
     eval_env = gym.make(env_name)
     eval_env.seed(seed + 100)
@@ -42,8 +43,6 @@ def eval_policy(policy, env_name,seed,eval_episodes=10):
     print(f"Evaluation over {eval_episodes} episodes: {avg_reward:.3f}")
     print("---------------------------------------")
     return avg_reward
-    
-    
 
 def get_estimation_bias(policy_name,policy,env_name,discount,seed,max_steps,max_action):
     
@@ -102,6 +101,9 @@ def get_estimation_bias(policy_name,policy,env_name,discount,seed,max_steps,max_
 
             true_Q=true_Q + (discount**t)*reward
             
+    elif(policy_name=="SPGTQC" or policy_name == "TQC"):
+        estimated_Q = None
+        true_Q = None
     return estimated_Q,true_Q
 
 if __name__ == "__main__":
@@ -111,7 +113,7 @@ if __name__ == "__main__":
     parser.add_argument("--env",default="HalfCheetah-v4")
     parser.add_argument("--seed",default=0,type=int)
     parser.add_argument("--start_timesteps",default=25e3,type=int) #timesteps to start training from
-    parser.add_argument("--eval_freq",default=5e3,type=int)
+    parser.add_argument("--eval_freq",default=50e3,type=int)
     parser.add_argument("--max_timesteps",default=1e6,type=int)
     
     parser.add_argument("--expl_noise",default=0.1) #standard deviation of gaussian exploration noise
@@ -208,7 +210,13 @@ if __name__ == "__main__":
         kwargs["top_quantiles_to_drop"] = 2
         kwargs["target_entropy"] = -np.prod(env.action_space.shape).item()
         policy = SPGTQC.SPGTQC(**kwargs)
-
+    
+    elif args.policy == "TQC":
+        kwargs["n_quantiles"] = 25
+        kwargs["n_nets"] = 5
+        kwargs["top_quantiles_to_drop"] = 2
+        kwargs["target_entropy"] = -np.prod(env.action_space.shape).item()
+        policy = TQC.TQC(**kwargs)
 
     if args.load_model != "":
         policy_file = file_name if args.load_model == "default" else args.load_model
@@ -239,8 +247,10 @@ if __name__ == "__main__":
             action = env.action_space.sample()
 
         else:
-            action = (policy.select_action(np.array(state)) + np.random.normal(0,max_action * args.expl_noise,size = action_dim)
-                     ).clip(-max_action,max_action)
+            if(args.policy=="TQC"):
+                action = policy.select_action(np.array(state)).clip(-max_action,max_action)
+            else:
+                action = (policy.select_action(np.array(state)) + np.random.normal(0,max_action * args.expl_noise,size = action_dim)).clip(-max_action,max_action)
 
 
         next_state,reward,done,_ = env.step(action)
@@ -256,7 +266,7 @@ if __name__ == "__main__":
         
         if t>args.start_timesteps:
             
-            if(args.policy == "SPG" or args.policy == "SPGR"):
+            if(args.policy == "SPG" or args.policy == "SPGR" or args.policy == "SPGTQC" or args.policy=="TQC"):
                 sigma_noise = max(sigma_noise_final, sigma_noise_start - episode_timesteps/sigma_decay)
                 policy.train(replay_buffer,sigma_noise,search,args.batch_size)
             
@@ -286,7 +296,7 @@ if __name__ == "__main__":
                 np.save("./results/"+args.env+"/"+args.policy+"/"+file_name+"_training_rewards",training_rewards_list)
                 #np.save(f"./results/{file_name}_training_rewards_list",training_rewards_list)
                 
-            if(args.get_estimates):
+            if(int(args.get_estimates)):
                 #Get Q value estimates
                 e_Q,t_Q = get_estimation_bias(args.policy,policy,args.env,args.discount,args.seed,args.max_timesteps,max_action)
                 estimated_Q.append(e_Q)
