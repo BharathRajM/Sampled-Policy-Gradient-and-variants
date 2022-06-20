@@ -22,31 +22,31 @@ torch.autograd.set_detect_anomaly(True)
 
 # In[5]:
 
+def quantile_huber_loss_f(quantiles, samples):
+    pairwise_delta = samples[:, None, None, :] - quantiles[:, :, :, None]  # batch x nets x quantiles x samples
+    abs_pairwise_delta = torch.abs(pairwise_delta)
+    huber_loss = torch.where(abs_pairwise_delta > 1,
+                             abs_pairwise_delta - 0.5,
+                             pairwise_delta ** 2 * 0.5)
+
+    n_quantiles = quantiles.shape[2]
+    tau = torch.arange(n_quantiles, device=device).float() / n_quantiles + 1 / 2 / n_quantiles
+    loss = (torch.abs(tau[None, None, :, None] - (pairwise_delta < 0).float()) * huber_loss).mean()
+    return loss
+
 #def quantile_huber_loss_f(quantiles,samples):
-#    pairwise_delta = samples[:None,None,:] - quantiles[:, :, :, None]
+#    samples = samples.reshape(quantiles.shape)
+#    pairwise_delta = samples[:,:] - quantiles[:, :]
 #    abs_pairwise_delta = torch.abs(pairwise_delta)
 #    huber_loss = torch.where(abs_pairwise_delta>1,
 #                             abs_pairwise_delta - 0.5,
 #                             pairwise_delta ** 2 * 0.5)
-    
+#    
 #    n_quantiles = quantiles.shape[2]
-#    tau = torch.arange(n_quantiles, device = DEVICE).float() / n_quantiles + 1 / 2 / n_quantiles
-#    loss = (torch.abs(tau[None, None, :, None] - (pairwise_delta < 0).float()) * huber_loss).mean()
+#    tau = torch.arange(n_quantiles, device = device).float() / n_quantiles + 1 / 2 / n_quantiles
+#    
+#    loss = (torch.abs(tau[None, None, None] - (pairwise_delta < 0).float()) * huber_loss).mean()
 #    return loss
-
-def quantile_huber_loss_f(quantiles,samples):
-    samples = samples.reshape(quantiles.shape)
-    pairwise_delta = samples[:,:] - quantiles[:, :]
-    abs_pairwise_delta = torch.abs(pairwise_delta)
-    huber_loss = torch.where(abs_pairwise_delta>1,
-                             abs_pairwise_delta - 0.5,
-                             pairwise_delta ** 2 * 0.5)
-    
-    n_quantiles = quantiles.shape[2]
-    tau = torch.arange(n_quantiles, device = device).float() / n_quantiles + 1 / 2 / n_quantiles
-    
-    loss = (torch.abs(tau[None, None, None] - (pairwise_delta < 0).float()) * huber_loss).mean()
-    return loss
                                    
 
 class TanhNormal(Distribution):
@@ -89,7 +89,7 @@ class Mlp(nn.Module):
     def forward(self,inp):
         h = inp
         for fc in self.fcs:
-            h = F.relu(fc(h),inplace=False)
+            h = F.relu(fc(h))
         output = self.last_fc(h)
         return output
 
@@ -189,11 +189,18 @@ class SPGTQC(object):
         return action.cpu().data.numpy().flatten()
         
     def train_tqc(self,replay_buffer,sigma_noise,search,batch_size=256):
-        
+        self.actor.train()
         #sample from buffer
         state,action,next_state,reward,not_done = replay_buffer.sample(batch_size)
         
         alpha = torch.exp(self.log_alpha)
+        
+        new_action,log_pi = self.actor(state)
+        alpha_loss = -self.log_alpha*(log_pi + self.target_entropy).detach().mean()
+        actor_loss = (alpha*log_pi - self.critic(state,new_action).mean(2).mean(1,keepdim=True)).mean()
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
         
         with torch.no_grad():
             
@@ -209,17 +216,13 @@ class SPGTQC(object):
         cur_z = self.critic(state,action)
         critic_loss = quantile_huber_loss_f(cur_z,target)
               
-        new_action,log_pi = self.actor(state)
-        alpha_loss = -self.log_alpha*(log_pi + self.target_entropy).detach().mean()
-        actor_loss = (alpha*log_pi - self.critic(state,new_action).mean(2).mean(1,keepdim=True)).mean()
+
         
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
         
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
+        
         
         self.alpha_optimizer.zero_grad()
         alpha_loss.backward()
@@ -270,7 +273,7 @@ class SPGTQC(object):
             sorted_z_part = sorted_z[:, :self.quantiles_total-self.top_quantiles_to_drop]
 
             #compute target
-            target = reward + not_done*self.discount*(sorted_z - alpha*next_log_pi)
+            target = reward + not_done*self.discount*(sorted_z_part - alpha*next_log_pi)
         
         cur_z = self.critic(state,action)
         critic_loss = quantile_huber_loss_f(cur_z,target)
