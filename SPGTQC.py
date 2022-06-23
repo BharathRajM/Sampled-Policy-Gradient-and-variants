@@ -3,6 +3,7 @@
 
 # In[4]:
 
+#Working version of SPGTQC
 
 import numpy as np
 import copy
@@ -18,7 +19,7 @@ from torch.distributions import Distribution,Normal
 
 LOG_STD_MIN_MAX = (-20,2)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-torch.autograd.set_detect_anomaly(True)
+#torch.autograd.set_detect_anomaly(True)
 
 # In[5]:
 
@@ -41,10 +42,10 @@ def quantile_huber_loss_f(quantiles, samples):
 #    huber_loss = torch.where(abs_pairwise_delta>1,
 #                             abs_pairwise_delta - 0.5,
 #                             pairwise_delta ** 2 * 0.5)
-#    
+    
 #    n_quantiles = quantiles.shape[2]
 #    tau = torch.arange(n_quantiles, device = device).float() / n_quantiles + 1 / 2 / n_quantiles
-#    
+    
 #    loss = (torch.abs(tau[None, None, None] - (pairwise_delta < 0).float()) * huber_loss).mean()
 #    return loss
                                    
@@ -108,10 +109,10 @@ class Actor(nn.Module):
     def forward(self, state):
         
         action = self.l1(state)
-        action = F.relu(action,inplace=False)
+        action = F.relu(action)
         
         action = self.l2(action)
-        action = F.relu(action,inplace=False)
+        action = F.relu(action)
         
         action = self.l3(action)
         
@@ -122,11 +123,13 @@ class Actor(nn.Module):
             std = torch.exp(log_std)
             tanh_normal = TanhNormal(mean,std)
             action,pre_tanh = tanh_normal.rsample()
+            action = self.max_action * action
             log_prob = tanh_normal.log_prob(pre_tanh)
             log_prob = log_prob.sum(dim=1,keepdim=True)
         
         else:
             action = torch.tanh(mean)
+            action = self.max_action * action
             log_prob = None
         
         return action,log_prob
@@ -145,13 +148,13 @@ class Critic(nn.Module):
         self.n_nets = n_nets
         
         for i in range(n_nets):
-            net = Mlp(state_dim+action_dim,[256,256,256],n_quantiles)
+            net = Mlp(state_dim+action_dim,[512,512,512],n_quantiles)
             self.add_module(f'qf{i}',net)
             self.nets.append(net)
         
     def forward(self,state,action):
         
-        sa_distribution = torch.cat([state,action],1)
+        sa_distribution = torch.cat((state,action),1)
         quantiles = torch.stack(tuple(net(sa_distribution) for net in self.nets ),dim=1)
         return quantiles
 
@@ -188,50 +191,9 @@ class SPGTQC(object):
         #print("ACTION:--------\n",action)
         return action.cpu().data.numpy().flatten()
         
-    def train_tqc(self,replay_buffer,sigma_noise,search,batch_size=256):
-        self.actor.train()
-        #sample from buffer
-        state,action,next_state,reward,not_done = replay_buffer.sample(batch_size)
-        
-        alpha = torch.exp(self.log_alpha)
-        
-        new_action,log_pi = self.actor(state)
-        alpha_loss = -self.log_alpha*(log_pi + self.target_entropy).detach().mean()
-        actor_loss = (alpha*log_pi - self.critic(state,new_action).mean(2).mean(1,keepdim=True)).mean()
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
-        
-        with torch.no_grad():
-            
-            new_next_action, next_log_pi = self.actor(next_state)
-            
-            next_z = self.critic_target(next_state,new_next_action)
-            sorted_z,_ = torch.sort(next_z.reshape(batch_size,-1))
-            sorted_z_part = sorted_z[:, :self.quantiles_total-self.top_quantiles_to_drop]
-            
-            #compute target
-            target = reward + not_done*self.discount*(sorted_z - alpha*next_log_pi)
-        
-        cur_z = self.critic(state,action)
-        critic_loss = quantile_huber_loss_f(cur_z,target)
-              
-
-        
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
-        
-        
-        
-        self.alpha_optimizer.zero_grad()
-        alpha_loss.backward()
-        self.alpha_optimizer.step()
-        
-        for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1-self.tau)*target_param.data)
-            
     def train(self,replay_buffer,sigma_noise,search,batch_size=256):
+        
+        self.actor.train()
         
         alpha = torch.exp(self.log_alpha)
         
@@ -239,11 +201,11 @@ class SPGTQC(object):
         state,action,next_state,reward,not_done = replay_buffer.sample(batch_size)
         
         pi_s,_ = self.actor(state)
-        policyQ_d = self.critic(state,pi_s).mean(2).mean(1,keepdim=True)
+        policyQ_d = self.critic(state,pi_s)#.mean(2).mean(1,keepdim=True)
         best = pi_s
         
         #current Qd for (s,a)
-        current_Q_d = self.critic(state,action).mean(2).mean(1,keepdim=True)
+        current_Q_d = self.critic(state,action)#.mean(2).mean(1,keepdim=True)
         
         cond_1 = current_Q_d > policyQ_d
         indices_1 = cond_1.nonzero(as_tuple=False)
@@ -256,14 +218,23 @@ class SPGTQC(object):
             for s in range(search):
                 
                 sampled_action = best + (torch.randn(best.size())*sqrt(sigma_noise)).to(device)
-                Q_d_1 = self.critic(state,sampled_action).mean(2).mean(1,keepdim=True)
-                Q_d_2 = self.critic(state,best).mean(2).mean(1,keepdim=True)
+                Q_d_1 = self.critic(state,sampled_action)#.mean(2).mean(1,keepdim=True)
+                Q_d_2 = self.critic(state,best)#.mean(2).mean(1,keepdim=True)
                 
                 cond_2 = Q_d_1>Q_d_2
                 indices_2 = cond_2.nonzero(as_tuple=False)
                 best[indices_2] = sampled_action[indices_2]
             best = torch.clip(best,-1,1).to(device)
-
+        
+        new_action,log_pi = self.actor(state)
+        alpha_loss = -self.log_alpha*(log_pi + self.target_entropy).detach().mean()
+        actor_loss = (alpha*log_pi - self.critic(state,new_action).mean(2).mean(1,keepdim=True)).mean() + F.mse_loss(new_action,best)
+        
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+        
+        with torch.no_grad():
         
             # critic loss
             new_next_action, next_log_pi = self.actor(next_state)
@@ -277,21 +248,12 @@ class SPGTQC(object):
         
         cur_z = self.critic(state,action)
         critic_loss = quantile_huber_loss_f(cur_z,target)
-              
-        new_action,log_pi = self.actor(state)
-        alpha_loss = -self.log_alpha*(log_pi + self.target_entropy).detach().mean()
-        #actor_loss = (alpha*log_pi - self.critic(state,new_action).mean(2).mean(1,keepdim=True)).mean()
-        
-        current_action,_ = self.actor(state)
-        actor_loss = F.mse_loss(current_action,best)
         
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
         
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
+        
         
         self.alpha_optimizer.zero_grad()
         alpha_loss.backward()
