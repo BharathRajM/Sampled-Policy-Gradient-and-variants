@@ -12,10 +12,12 @@ import os
 import utils
 
 import OurDDPG
-import SPG
 import TD3
+import SPG
 import SPGTQC
 import TQC
+import SPGTD3
+import SPGOAC
 
 # In[17]:
 
@@ -76,8 +78,34 @@ def get_estimation_bias(policy_name,policy,env_name,discount,seed,max_steps,max_
             episode_reward+=reward
 
             true_Q=true_Q + (discount**t)*reward 
+            
+    elif(policy_name=="SPGOAC" or policy_name=="OAC"):
+        #these 4 architectures use 2 critics with double clipped learning.
+        
+        #estimated Q(s,a)
+        starting_state = torch.FloatTensor(state.reshape(1,-1)).to(device)
+        _,starting_action,_ = policy.actor(starting_state)
+        estimated_Q1,estimated_Q2 = policy.critic(starting_state,starting_action)
+        estimated_Q = torch.min(estimated_Q1,estimated_Q2)
+
+        starting_action = starting_action.cpu().data.numpy().flatten()
+        estimated_Q = estimated_Q.cpu().data.numpy().flatten()
+
+        true_Q = 0
+
+        for t in range(int(max_steps)):
+
+            if(done):
+                break
+
+            action = (policy.select_action(np.array(state))).clip(-max_action,max_action)
+            next_state,reward,done,_ = eval_env.step(action)
+            state = next_state
+            episode_reward+=reward
+
+            true_Q=true_Q + (discount**t)*reward
     
-    if(policy_name=="TD3"):
+    if(policy_name=="TD3" or policy_name=="SPGTD3"):
         #estimated Q(s,a)
         starting_state = torch.FloatTensor(state.reshape(1,-1)).to(device)
         starting_action = policy.actor(starting_state)
@@ -109,11 +137,11 @@ def get_estimation_bias(policy_name,policy,env_name,discount,seed,max_steps,max_
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--policy",default="OurDDPG")
-    parser.add_argument("--env",default="HalfCheetah-v4")
+    parser.add_argument("--policy",default="SPGTQC")
+    parser.add_argument("--env",default="Humanoid-v4")
     parser.add_argument("--seed",default=0,type=int)
-    parser.add_argument("--start_timesteps",default=25e3,type=int) #timesteps to start training from
-    parser.add_argument("--eval_freq",default=50e3,type=int)
+    parser.add_argument("--start_timesteps",default=256,type=int) #timesteps to start training from
+    parser.add_argument("--eval_freq",default=5e3,type=int)
     parser.add_argument("--max_timesteps",default=1e6,type=int)
     
     parser.add_argument("--expl_noise",default=0.1) #standard deviation of gaussian exploration noise
@@ -131,8 +159,12 @@ if __name__ == "__main__":
     parser.add_argument("--sigma_noise_start",default = 0.7)
     parser.add_argument("--search", default=8,type=int)                # Range to clip target policy noise
     
+    #For SPGTQC and TQC
+    parser.add_argument("--n_nets", default=5,type=int)             # For the number of critic networks
+    parser.add_argument("--n_quantiles", default=25,type=int)       # Number of quantiles for each critic distribution
+    parser.add_argument("--top_quantiles_to_drop", default=2,type=int) # Number of quantiles to drop during truncation
     
-    
+
     parser.add_argument("--save_model", action="store_true")        # Save model and optimizer parameters
     parser.add_argument("--load_model", default="")                 # Model load file name, "" doesn't load, "default" uses file_name
     parser.add_argument("--get_estimates", default=1)                 # Model load file name, "" doesn't load, "default" uses file_name
@@ -194,6 +226,12 @@ if __name__ == "__main__":
         kwargs["noise_clip"] = args.noise_clip * max_action
         kwargs["policy_freq"] = args.policy_freq
         policy = TD3.TD3(**kwargs)
+        
+    elif args.policy == "SPGTD3" :
+        kwargs["policy_noise"] = args.policy_noise * max_action
+        kwargs["noise_clip"] = args.noise_clip * max_action
+        kwargs["policy_freq"] = args.policy_freq
+        policy = SPGTD3.SPGTD3(**kwargs)
 
     elif args.policy == "DDPG" :
         policy = DDPG.DDPG(**kwargs)
@@ -201,22 +239,22 @@ if __name__ == "__main__":
     elif args.policy == "SPG":
         policy = SPG.SPG(**kwargs)
 
-    elif args.policy == "SPGR":
-        policy = SPGR.SPGR(**kwargs)
-
     elif args.policy == "SPGTQC":
-        kwargs["n_quantiles"] = 25
-        kwargs["n_nets"] = 5
-        kwargs["top_quantiles_to_drop"] = 2
+        kwargs["n_quantiles"] = args.n_quantiles
+        kwargs["n_nets"] = args.n_nets
+        kwargs["top_quantiles_to_drop"] = args.top_quantiles_to_drop
         kwargs["target_entropy"] = -np.prod(env.action_space.shape).item()
         policy = SPGTQC.SPGTQC(**kwargs)
     
     elif args.policy == "TQC":
-        kwargs["n_quantiles"] = 25
-        kwargs["n_nets"] = 5
-        kwargs["top_quantiles_to_drop"] = 2
+        kwargs["n_quantiles"] = args.n_quantiles
+        kwargs["n_nets"] = args.n_nets
+        kwargs["top_quantiles_to_drop"] = args.top_quantiles_to_drop
         kwargs["target_entropy"] = -np.prod(env.action_space.shape).item()
         policy = TQC.TQC(**kwargs)
+        
+    elif args.policy == "SPGOAC":
+        policy = SPGOAC.SPGOAC(**kwargs)
 
     if args.load_model != "":
         policy_file = file_name if args.load_model == "default" else args.load_model
@@ -226,7 +264,7 @@ if __name__ == "__main__":
 
     #evaluate untrained policy    
     evaluations = [eval_policy(policy, args.env, args.seed)]
-    #true Q value and estimated Q values
+
     #true Q value and estimated Q values
     true_Q = []
     estimated_Q = []
@@ -247,8 +285,12 @@ if __name__ == "__main__":
             action = env.action_space.sample()
 
         else:
-            if(args.policy=="TQC"):
+            if(args.policy=="TQC" or args.policy=="SPGTQC"):
                 action = policy.select_action(np.array(state)).clip(-max_action,max_action)
+                
+            elif(args.policy=="SPGOAC"):
+                action = policy.get_optimistic_exploration_action(np.array(state)).clip(-max_action,max_action)
+                
             else:
                 action = (policy.select_action(np.array(state)) + np.random.normal(0,max_action * args.expl_noise,size = action_dim)).clip(-max_action,max_action)
 
@@ -266,7 +308,7 @@ if __name__ == "__main__":
         
         if t>args.start_timesteps:
             
-            if(args.policy == "SPG" or args.policy == "SPGR" or args.policy == "SPGTQC" or args.policy=="TQC"):
+            if(args.policy == "SPG" or args.policy == "SPGR" or args.policy == "SPGTQC" or args.policy=="TQC" or args.policy=="SPGTD3" or args.policy=="SPGOAC"):
                 sigma_noise = max(sigma_noise_final, sigma_noise_start - episode_timesteps/sigma_decay)
                 policy.train(replay_buffer,sigma_noise,search,args.batch_size)
             
@@ -279,6 +321,7 @@ if __name__ == "__main__":
             
             print(f"Total Timesteps: {t+1} Episode Num: {episode_num+1} Episode Timestep:{episode_timesteps} Reward:{episode_reward:.3f}")
             training_rewards_list.append(episode_reward)
+            np.save("./results/"+args.env+"/"+args.policy+"/"+file_name+"_training_rewards",training_rewards_list)
             state,done = env.reset(),False
             episode_reward = 0
             episode_timesteps = 0
@@ -291,9 +334,10 @@ if __name__ == "__main__":
             evaluations.append(eval_policy(policy,args.env,args.seed))
             np.save("./results/"+args.env+"/"+args.policy+"/"+file_name+"_eval_rewards",evaluations)
             if(True):
+                
                 # save the model, rewards accumulated during training, rewards accumulated testing,
                 policy.save(f"./models/{file_name}")
-                np.save("./results/"+args.env+"/"+args.policy+"/"+file_name+"_training_rewards",training_rewards_list)
+                
                 #np.save(f"./results/{file_name}_training_rewards_list",training_rewards_list)
                 
             if(int(args.get_estimates)):
@@ -302,7 +346,4 @@ if __name__ == "__main__":
                 estimated_Q.append(e_Q)
                 true_Q.append(t_Q)
                 np.save("./results/"+args.env+"/"+args.policy+"/"+file_name+"_true_Q",true_Q)
-                np.save("./results/"+args.env+"/"+args.policy+"/"+file_name+"_estimated_Q",estimated_Q)    
-
-
-
+                np.save("./results/"+args.env+"/"+args.policy+"/"+file_name+"_estimated_Q",estimated_Q)

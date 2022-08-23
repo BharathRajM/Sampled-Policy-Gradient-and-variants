@@ -35,20 +35,7 @@ def quantile_huber_loss_f(quantiles, samples):
     loss = (torch.abs(tau[None, None, :, None] - (pairwise_delta < 0).float()) * huber_loss).mean()
     return loss
 
-#def quantile_huber_loss_f(quantiles,samples):
-#    samples = samples.reshape(quantiles.shape)
-#    pairwise_delta = samples[:,:] - quantiles[:, :]
-#    abs_pairwise_delta = torch.abs(pairwise_delta)
-#    huber_loss = torch.where(abs_pairwise_delta>1,
-#                             abs_pairwise_delta - 0.5,
-#                             pairwise_delta ** 2 * 0.5)
-    
-#    n_quantiles = quantiles.shape[2]
-#    tau = torch.arange(n_quantiles, device = device).float() / n_quantiles + 1 / 2 / n_quantiles
-    
-#    loss = (torch.abs(tau[None, None, None] - (pairwise_delta < 0).float()) * huber_loss).mean()
-#    return loss
-                                   
+                 
 
 class TanhNormal(Distribution):
     def __init__(self,normal_mean,normal_std):

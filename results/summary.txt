@@ -1,0 +1,6 @@
+
+Humanoid-v4	: seed0 - DDPG,TD3,SPG,TQC,SPGTQC
+HalfCheetah-v4 	: seed0 - DDPG,TD3,SPG,TQC,SPGTQC-0,9
+Hopper-v4	: seed0 - DDPG,TD3,SPG,TQC,SPGTQC-0
+Ant-v4		: seed0 - DDPG,TD3,SPG,TQC,SPGTQC
+Walker2d-v4	: seed0 - DDPG,TD3,SPG,TQC,SPGTQC
