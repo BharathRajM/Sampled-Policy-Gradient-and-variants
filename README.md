@@ -5,7 +5,7 @@
 ## Introduction
 
 This repository consists of all the codebase and the supporting files for the MSc thesis entitled "Extensions of Sampled Policy Gradient".
-With good coding habits and I present a clean and easy implementation of all the proposed algorithms, well maintained and documented in this repository. We follow the same file pattern as done in Fujimoto's TD3 repository.
+With good coding habits and I present a clean and easy implementation of all the proposed algorithms, well maintained and documented in this repository. We follow the same file pattern as done in [Fujimoto's TD3 repository](https://github.com/sfujim/TD3).
 
 ## Setup
 To begin setting up the environment, create a `pip` virtual environment as follows:
