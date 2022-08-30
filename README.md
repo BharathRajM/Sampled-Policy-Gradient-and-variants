@@ -29,4 +29,4 @@ When the model is undergoing training, the results of the model will be stored i
 To see the model performance curves and their overestimation bias curves, you can run the ipython notebooks `Graphs.ipnyb` and `Overestimation bias.ipnyb` respectively. To visualize the models performance in the simulation please run the `Visualize_results.ipnyb` notebook. 
 
 ## Environments
-For our study we used the [MuJoCo library]([https://pages.github.com/](https://github.com/openai/mujoco-py)). Kindly look here for more information
+For our study we used the [MuJoCo library](https://github.com/openai/mujoco-py). Kindly look here for more information
