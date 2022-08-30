@@ -21,3 +21,12 @@ For a quickstart, to train the agents you need to choose the `policy`: DDPG, TD3
 ```
 python main.py --policy SPG --env Humanoid-v4 
 ```
+
+When the model is undergoing training, the results of the model will be stored in the `results/` directory and the trained model will be stored in the `models/` directory. 
+
+## Results and visualizations
+
+To see the model performance curves and their overestimation bias curves, you can run the ipython notebooks `Graphs.ipnyb` and `Overestimation bias.ipnyb` respectively. To visualize the models performance in the simulation please run the `Visualize_results.ipnyb` notebook. 
+
+## Environments
+For our study we used the [MuJoCo library]([https://pages.github.com/](https://github.com/openai/mujoco-py)). Kindly look here for more information
